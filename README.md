@@ -66,13 +66,5 @@ Os três jobs de teste rodam **em paralelo** e são independentes entre si.
 **Onde ver os resultados:** na aba *Actions* → execução → *Summary*. Cada job publica uma tabela
 de resultados (testes aprovados/falhos, latências por endpoint) e anexa os relatórios completos
 como *artifacts* (JUnit, cobertura HTML, relatório HTML do Locust).
-
-## Publicar no GitHub
-
-```bash
-git init -b main
-git add .
-git commit -m "Projeto com testes unitários, integração e performance"
-git remote add origin https://github.com/<usuario>/<repositorio>.git
 git push -u origin main      # o push na main dispara a pipeline
 ```
