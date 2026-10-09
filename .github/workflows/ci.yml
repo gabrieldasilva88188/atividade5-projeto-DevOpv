@@ -1,0 +1,173 @@
+name: CI
+
+# Executa automaticamente a cada push na branch main (também pode ser disparado manualmente).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) Testes unitários (rápidos, sem I/O) + cobertura mínima de 90%
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Testes unitários
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Executar testes unitários
+        run: |
+          mkdir -p reports/unit
+          python -m pytest tests/unit -m unit \
+            --junitxml=reports/unit/junit.xml \
+            --cov=app.validators --cov=app.service \
+            --cov-report=term-missing \
+            --cov-report=xml:reports/unit/coverage.xml \
+            --cov-report=html:reports/unit/htmlcov \
+            --cov-fail-under=90
+
+      - name: Publicar resumo dos resultados
+        if: always()
+        run: python scripts/summarize_results.py junit reports/unit/junit.xml "Testes unitários" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Anexar relatórios (JUnit e cobertura)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-unitarios
+          path: reports/unit/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # 2) Testes de integração (API Flask + SQLite reais)
+  # ---------------------------------------------------------------------------
+  integration-tests:
+    name: Testes de integração
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Executar testes de integração
+        run: |
+          mkdir -p reports/integration
+          python -m pytest tests/integration -m integration \
+            --junitxml=reports/integration/junit.xml
+
+      - name: Publicar resumo dos resultados
+        if: always()
+        run: python scripts/summarize_results.py junit reports/integration/junit.xml "Testes de integração" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Anexar relatórios (JUnit)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-integracao
+          path: reports/integration/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # 3) Testes de performance (Locust contra o servidor real)
+  #    Falha se: P95 > 500 ms, falhas > 1% ou vazão < 20 req/s
+  # ---------------------------------------------------------------------------
+  performance-tests:
+    name: Testes de performance
+    runs-on: ubuntu-latest
+    env:
+      USERS: "20"
+      SPAWN_RATE: "5"
+      RUN_TIME: "30s"
+      P95_MS: "500"
+      MAX_FAIL_RATIO: "0.01"
+      MIN_RPS: "20"
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-perf.txt
+
+      - name: Executar testes de performance
+        run: python scripts/run_performance.py
+
+      - name: Publicar resumo dos resultados
+        if: always()
+        run: python scripts/summarize_results.py locust reports/performance/locust_stats.csv "Testes de performance" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Anexar relatórios (HTML e CSV)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-performance
+          path: reports/performance/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # 4) Resultado consolidado: falha se qualquer etapa de teste falhou
+  # ---------------------------------------------------------------------------
+  resultado:
+    name: Resultado final
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, performance-tests]
+    if: always()
+    steps:
+      - name: Consolidar resultados
+        run: |
+          {
+            echo "## Resultado do pipeline"
+            echo ""
+            echo "| Etapa | Status |"
+            echo "|---|---|"
+            echo "| Unitários | ${{ needs.unit-tests.result }} |"
+            echo "| Integração | ${{ needs.integration-tests.result }} |"
+            echo "| Performance | ${{ needs.performance-tests.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ needs.unit-tests.result }}" != "success" ] || \
+             [ "${{ needs.integration-tests.result }}" != "success" ] || \
+             [ "${{ needs.performance-tests.result }}" != "success" ]; then
+            echo "Alguma etapa de teste falhou."
+            exit 1
+          fi
+          echo "Todos os testes passaram."
